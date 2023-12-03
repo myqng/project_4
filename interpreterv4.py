@@ -115,11 +115,11 @@ class Interpreter(InterpreterBase):
             return self.__call_print(call_ast)
         if func_name == "inputi":
             return self.__call_input(call_ast)
-        isMethod = False
         actual_args = call_ast.get("args")
         
         if call_ast.elem_type == InterpreterBase.MCALL_DEF:
             obj_name = call_ast.get("objref")
+            self.env.set("this", self.env.get(obj_name))
             obj = self.env.get(obj_name)
             if (obj.t != Type.OBJECT):
                 super().error(
@@ -130,7 +130,6 @@ class Interpreter(InterpreterBase):
                 super().error(ErrorType.NAME_ERROR, f"Method {obj_name}.{field_name} not found")
             else:
                 target_closure = obj.v.get_field_val(field_name).v
-                isMethod = True
         else:
             target_closure = self.__get_func_by_name(func_name, len(actual_args))
       
@@ -144,8 +143,6 @@ class Interpreter(InterpreterBase):
         self.__prepare_env_with_closed_variables(target_closure, new_env)
         self.__prepare_params(target_ast,call_ast, new_env)
         self.env.push(new_env)
-        if isMethod:
-            new_env["obj_ref"] = obj_name
         _, return_val = self.__run_statements(target_ast.get("statements"))
         self.env.pop()
         return return_val
@@ -210,10 +207,6 @@ class Interpreter(InterpreterBase):
         if target_value_obj is None and self.env.get("obj_ref") is None:
             self.env.set(var_name, src_value_obj)
         else:
-            # if a close is changed to another type such as int, we cannot make function calls on it any more 
-            if (self.env.get("obj_ref") is not None):
-                obj_name = self.env.get("obj_ref")
-                target_value_obj = self.env.get(obj_name)
             if target_value_obj.t == Type.CLOSURE and src_value_obj.t != Type.CLOSURE:
                 target_value_obj.v.type = src_value_obj.t
             if field is None:
@@ -257,9 +250,6 @@ class Interpreter(InterpreterBase):
             field = name_field[1]
 
             obj = self.env.get(var_name)
-            if obj is None:
-                obj_name = self.env.get("obj_ref")
-                obj = self.env.get(obj_name)
             if (obj.t != Type.OBJECT):
                 super().error(
                     ErrorType.TYPE_ERROR, f"{var_name} is not an object!"
