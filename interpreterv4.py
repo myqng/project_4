@@ -122,7 +122,8 @@ class Interpreter(InterpreterBase):
             obj = self.env.get(obj_name)
             if obj is None:
                 super().error(ErrorType.NAME_ERROR, f"{obj_name} not found")
-            self.env.set("this", self.env.get(obj_name))
+            if (self.env.get("this" is None)):
+                self.env.set("this", self.env.get(obj_name))
             if (obj.t != Type.OBJECT):
                 super().error(
                     ErrorType.TYPE_ERROR, f"{obj_name} is not an object!"
@@ -151,6 +152,8 @@ class Interpreter(InterpreterBase):
         target_ast = target_closure.func_ast
 
         new_env = {}
+        if call_ast.elem_type == InterpreterBase.MCALL_DEF:
+            new_env["this"] = self.env.get(obj_name)
         self.__prepare_env_with_closed_variables(target_closure, new_env)
         self.__prepare_params(target_ast,call_ast, new_env)
         self.env.push(new_env)

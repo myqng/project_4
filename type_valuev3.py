@@ -11,6 +11,7 @@ class Type(Enum):
     STRING = 3
     CLOSURE = 4
     NIL = 5
+    OBJECT = 6
 
 
 class Closure:
@@ -19,6 +20,27 @@ class Closure:
         self.func_ast = func_ast
         self.type = Type.CLOSURE
 
+class Object:
+    def __init__(self):
+        self.type = Type.OBJECT
+        self.fields = {}
+        self.has_proto = False
+        self.proto = None
+
+    def set_field(self, field, other):
+        self.fields[field] = other
+
+    def get_field_val(self, field):
+        if field in self.fields:
+            return self.fields[field]
+        return None
+    
+    def set_proto(self, proto):
+        self.has_proto = True
+        self.proto = proto
+
+    def get_proto(self):
+        return self.proto
 
 # Represents a value, which has a type and its value
 class Value:

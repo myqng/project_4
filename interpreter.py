@@ -4,7 +4,7 @@ from enum import Enum
 from brewparse import parse_program
 from env_v3 import EnvironmentManager
 from intbase import InterpreterBase, ErrorType
-from type_valuev3 import Closure, Type, Value, create_value, get_printable
+from type_valuev3 import Object, Closure, Type, Value, create_value, get_printable
 
 
 class ExecStatus(Enum):
@@ -30,6 +30,7 @@ class Interpreter(InterpreterBase):
     # into an abstract syntax tree (ast)
     def run(self, program):
         ast = parse_program(program)
+        print(f"{ast}")
         self.__set_up_function_table(ast)
         self.env = EnvironmentManager()
         main_func = self.__get_func_by_name("main", 0)
@@ -87,10 +88,14 @@ class Interpreter(InterpreterBase):
     def __run_statements(self, statements):
         self.env.push()
         for statement in statements:
+            print("----\nstatement: " + str(statement))
+            # print("\ndictionary at statement:")
+            # self.env.print()
+            # print()
             if self.trace_output:
                 print(statement)
             status = ExecStatus.CONTINUE
-            if statement.elem_type == InterpreterBase.FCALL_DEF:
+            if (statement.elem_type == InterpreterBase.FCALL_DEF or statement.elem_type == InterpreterBase.MCALL_DEF):
                 self.__call_func(statement)
             elif statement.elem_type == "=":
                 self.__assign(statement)
@@ -100,6 +105,9 @@ class Interpreter(InterpreterBase):
                 status, return_val = self.__do_if(statement)
             elif statement.elem_type == Interpreter.WHILE_DEF:
                 status, return_val = self.__do_while(statement)
+
+            print("\ndictionary after completing statement:")
+            self.env.print()
 
             if status == ExecStatus.RETURN:
                 self.env.pop()
@@ -112,12 +120,41 @@ class Interpreter(InterpreterBase):
     def __call_func(self, call_ast):
         func_name = call_ast.get("name")
         if func_name == "print":
+            print("*printed by prog*:")
             return self.__call_print(call_ast)
         if func_name == "inputi":
             return self.__call_input(call_ast)
-
         actual_args = call_ast.get("args")
-        target_closure = self.__get_func_by_name(func_name, len(actual_args))
+        
+        if call_ast.elem_type == InterpreterBase.MCALL_DEF:
+            obj_name = call_ast.get("objref")
+            obj = self.env.get(obj_name)
+            if obj is None:
+                super().error(ErrorType.NAME_ERROR, f"{obj_name} not found")
+            if (self.env.get("this" is None)):
+                self.env.set("this", self.env.get(obj_name))
+                print(f"assigned this to {obj_name} object")
+            if (obj.t != Type.OBJECT):
+                super().error(
+                    ErrorType.TYPE_ERROR, f"{obj_name} is not an object!"
+                )
+            field_name = call_ast.get("name")
+            method = obj.v.get_field_val(field_name)
+            while (method is None and obj.v.has_proto):
+                obj = obj.v.get_proto()
+                if (obj.t == Type.NIL):
+                    break
+                method = obj.v.get_field_val(field_name)
+
+            if (method is None):
+                super().error(ErrorType.NAME_ERROR, f"Method {obj_name}.{field_name} not found")
+            if (method.t != Type.CLOSURE):
+                super().error(ErrorType.TYPE_ERROR, f"Method {obj_name}.{field_name} is not a function/lambda/closure")
+            else:
+                target_closure = method.v
+        else:
+            target_closure = self.__get_func_by_name(func_name, len(actual_args))
+      
         if target_closure == None:
             super().error(ErrorType.NAME_ERROR, f"Function {func_name} not found")
         if target_closure.type != Type.CLOSURE:
@@ -125,9 +162,14 @@ class Interpreter(InterpreterBase):
         target_ast = target_closure.func_ast
 
         new_env = {}
+        if call_ast.elem_type == InterpreterBase.MCALL_DEF:
+            new_env["this"] = self.env.get(obj_name)
+            print(f"*assigned this to {obj_name} object")
         self.__prepare_env_with_closed_variables(target_closure, new_env)
         self.__prepare_params(target_ast,call_ast, new_env)
         self.env.push(new_env)
+        # if isMethod:
+        #     new_env["obj_ref"] = obj_name
         _, return_val = self.__run_statements(target_ast.get("statements"))
         self.env.pop()
         return return_val
@@ -136,7 +178,8 @@ class Interpreter(InterpreterBase):
         for var_name, value in target_closure.captured_env:
             # Updated here - ignore updates to the scope if we
             #   altered a parameter, or if the argument is a similarly named variable
-            temp_env[var_name] = value
+            if value.t != Type.OBJECT and value.t != Type.CLOSURE:
+                temp_env[var_name] = value
 
 
     def __prepare_params(self, target_ast, call_ast, temp_env):
@@ -159,6 +202,7 @@ class Interpreter(InterpreterBase):
     def __call_print(self, call_ast):
         output = ""
         for arg in call_ast.get("args"):
+            print(arg.elem_type)
             result = self.__eval_expr(arg)  # result is a Value object
             output = output + get_printable(result)
         super().output(output)
@@ -181,15 +225,35 @@ class Interpreter(InterpreterBase):
 
     def __assign(self, assign_ast):
         var_name = assign_ast.get("name")
+        field = None
+        if ("." in var_name):
+            name_field = var_name.split(".")
+            var_name = name_field[0]
+            field  = name_field[1]
         src_value_obj = copy.copy(self.__eval_expr(assign_ast.get("expression")))
         target_value_obj = self.env.get(var_name)
-        if target_value_obj is None:
+        if target_value_obj is None and self.env.get("obj_ref") is None:
             self.env.set(var_name, src_value_obj)
         else:
-                        # if a close is changed to another type such as int, we cannot make function calls on it any more 
             if target_value_obj.t == Type.CLOSURE and src_value_obj.t != Type.CLOSURE:
                 target_value_obj.v.type = src_value_obj.t
-            target_value_obj.set(src_value_obj)
+            if field is None:
+                target_value_obj.set(src_value_obj)
+            else:
+                if (target_value_obj.t != Type.OBJECT):
+                    super().error(
+                        ErrorType.TYPE_ERROR, f"{var_name} is not an object"
+                    )
+                if (field == "proto"):
+                    target_value_obj.v.set_proto(src_value_obj)
+                    if (src_value_obj.t != Type.OBJECT and src_value_obj.t != Type.NIL):
+                        super().error(
+                            ErrorType.TYPE_ERROR, f"Specified prototype is a non-object"
+                        )
+                    print(f"{var_name} is proto of {src_value_obj}")
+    
+                target_value_obj.v.set_field(field, src_value_obj)
+                print(f"fields: {target_value_obj.v.fields}")
 
     def __eval_expr(self, expr_ast):
         if expr_ast.elem_type == InterpreterBase.NIL_DEF:
@@ -202,7 +266,7 @@ class Interpreter(InterpreterBase):
             return Value(Type.BOOL, expr_ast.get("val"))
         if expr_ast.elem_type == InterpreterBase.VAR_DEF:
             return self.__eval_name(expr_ast)
-        if expr_ast.elem_type == InterpreterBase.FCALL_DEF:
+        if expr_ast.elem_type == InterpreterBase.FCALL_DEF or expr_ast.elem_type == InterpreterBase.MCALL_DEF:
             return self.__call_func(expr_ast)
         if expr_ast.elem_type in Interpreter.BIN_OPS:
             return self.__eval_op(expr_ast)
@@ -212,12 +276,39 @@ class Interpreter(InterpreterBase):
             return self.__eval_unary(expr_ast, Type.BOOL, lambda x: not x)
         if expr_ast.elem_type == Interpreter.LAMBDA_DEF:
             return Value(Type.CLOSURE, Closure(expr_ast, self.env))
+        if expr_ast.elem_type == Interpreter.OBJ_DEF:
+            return Value(Type.OBJECT, Object())
 
     def __eval_name(self, name_ast):
         var_name = name_ast.get("name")
         val = self.env.get(var_name)
         if val is not None:
             return val
+        
+        if ("." in var_name):
+            name_field = var_name.split(".")
+            var_name = name_field[0]
+            field = name_field[1]
+
+            obj = self.env.get(var_name)
+            if (obj.t != Type.OBJECT):
+                super().error(
+                    ErrorType.TYPE_ERROR, f"{var_name} is not an object!"
+                )
+            
+            value = obj.v.get_field_val(field)
+            while (value is None and obj.v.has_proto):
+                obj = obj.v.get_proto()
+                if (obj.t == Type.NIL):
+                    break
+                value = obj.v.get_field_val(field)
+            
+            if value is None:
+                super().error(
+                    ErrorType.NAME_ERROR, f"Variable/function {var_name}.{field} not found"
+                )
+            return(value)
+
         closure = self.__get_func_by_name(var_name, None)
         if closure is None:
             super().error(
@@ -380,6 +471,15 @@ class Interpreter(InterpreterBase):
             Type.BOOL, x.value() != y.value()
         )
 
+        #  set up operations on objects
+        self.op_to_lambda[Type.OBJECT] = {}
+        self.op_to_lambda[Type.OBJECT]["=="] = lambda x, y: Value(
+            Type.BOOL, x.value() == y.value()
+        )
+        self.op_to_lambda[Type.OBJECT]["!="] = lambda x, y: Value(
+            Type.BOOL, x.value() != y.value()
+        )
+
     def __do_if(self, if_ast):
         cond_ast = if_ast.get("condition")
         result = self.__eval_expr(cond_ast)
@@ -428,3 +528,143 @@ class Interpreter(InterpreterBase):
             return (ExecStatus.RETURN, Interpreter.NIL_VALUE)
         value_obj = copy.deepcopy(self.__eval_expr(expr_ast))
         return (ExecStatus.RETURN, value_obj)
+    
+
+def main():
+    #all programs will be provided to your interpreter as a python string,
+    # just as shown here.
+
+    program_source0 = """
+func main() {
+  a = @;
+  a.x = 2;
+  b = @;
+  b.proto = a;
+  a.lam = lambda() {
+    if (this.x > 0) {
+      this.x = this.x - 1;
+      
+      print(this.x);
+      b.lam();
+    }
+
+    test = lambda() {
+      
+      print(this.x);
+    };
+    test();
+  };
+  a.lam();
+  
+  print(a.x);
+} 
+    """
+        
+    program_source1 = """
+    func foo(f1, ref f2){
+        f1();
+        f2();
+    }
+    
+    func main() {
+        x = 0;
+        lam1 = lambda() { x = x + 1; print(x); };
+        lam2 = lambda() { x = x + 1; print(x); };
+        foo(lam1, lam2);
+        lam1();
+        lam2();
+    }
+    """
+
+    program_source2 = """
+    func foo(ref x) {
+        x();
+    }
+
+    func main() {
+    a = lambda() { print("hi"); };
+    foo(a);
+    }
+    """
+
+    program_source2_5 = """
+
+    func bar(){
+        return nil;
+    }
+
+    func foo(){
+        c = 10;
+    }
+    func main() {
+        a = 5;
+        foo();
+        while (a == 5){
+            b = 10;
+            a = 6;
+        }
+        print(a);
+        print(b);
+        print(c);
+
+    }
+    """
+
+    program_source3 = """
+    func main() {
+        a = -5;
+        if (true == a){
+            print("This will print!");
+        }
+
+        if (!0){
+            print("This will print!");
+        }
+
+        if (false || 6){
+            print("This prints!");
+        }
+
+        a = 3;
+        while (a) {
+            print("This prints 3 times!");
+            a = a - 1;
+        }
+
+    }
+
+    """
+
+    program_source4 = """
+    func main() {
+        b = 3;
+        m = lambda(a) { b = a*b; print(b); };
+        m(4, 5);
+    }
+    """
+
+    program_source5 = """
+    func main() {
+        x = foo;
+        print(x == foo);
+        x = foo();
+        print(x == foo);
+        x("bar");
+    }
+
+    func foo() {
+        print("foo");
+        return bar;
+    }
+
+    func bar(x){
+        print(x);
+    }
+    """
+    # this is how you use our parser to parse a valid Brewin program into 
+    # an AST:
+
+    i.run(program_source0)
+
+i = Interpreter()
+main()

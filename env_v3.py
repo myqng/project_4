@@ -52,3 +52,12 @@ class EnvironmentManager:
 
     def __iter__(self):
         return self.__enumerate()
+    
+    def print(self):
+        for i in self.environment: 
+            for key in i.keys():
+                if (type(i[key]).__name__ == "Value"):
+                    val = i[key].value()
+                else:
+                    val = i[key]
+                print(f"var: {key}, value: {val}")
