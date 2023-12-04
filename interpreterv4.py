@@ -119,17 +119,28 @@ class Interpreter(InterpreterBase):
         
         if call_ast.elem_type == InterpreterBase.MCALL_DEF:
             obj_name = call_ast.get("objref")
-            self.env.set("this", self.env.get(obj_name))
             obj = self.env.get(obj_name)
+            if obj is None:
+                super().error(ErrorType.NAME_ERROR, f"{obj_name} not found")
+            self.env.set("this", self.env.get(obj_name))
             if (obj.t != Type.OBJECT):
                 super().error(
                     ErrorType.TYPE_ERROR, f"{obj_name} is not an object!"
                 )
             field_name = call_ast.get("name")
-            if (obj.v.get_field_val(field_name) is None):
+            method = obj.v.get_field_val(field_name)
+            while (method is None and obj.v.has_proto):
+                obj = obj.v.get_proto()
+                if (obj.t == Type.NIL):
+                    break
+                method = obj.v.get_field_val(field_name)
+
+            if (method is None):
                 super().error(ErrorType.NAME_ERROR, f"Method {obj_name}.{field_name} not found")
+            if (method.t != Type.CLOSURE):
+                super().error(ErrorType.TYPE_ERROR, f"Method {obj_name}.{field_name} is not a function/lambda/closure")
             else:
-                target_closure = obj.v.get_field_val(field_name).v
+                target_closure = method.v
         else:
             target_closure = self.__get_func_by_name(func_name, len(actual_args))
       
@@ -212,6 +223,16 @@ class Interpreter(InterpreterBase):
             if field is None:
                 target_value_obj.set(src_value_obj)
             else:
+                if (target_value_obj.t != Type.OBJECT):
+                    super().error(
+                        ErrorType.TYPE_ERROR, f"{var_name} is not an object"
+                    )
+                if (field == "proto"):
+                    target_value_obj.v.set_proto(src_value_obj)
+                    if (src_value_obj.t != Type.OBJECT and src_value_obj.t != Type.NIL):
+                        super().error(
+                            ErrorType.TYPE_ERROR, f"Specified prototype is a non-object"
+                        )
                 target_value_obj.v.set_field(field, src_value_obj)
 
     def __eval_expr(self, expr_ast):
@@ -225,7 +246,7 @@ class Interpreter(InterpreterBase):
             return Value(Type.BOOL, expr_ast.get("val"))
         if expr_ast.elem_type == InterpreterBase.VAR_DEF:
             return self.__eval_name(expr_ast)
-        if expr_ast.elem_type == InterpreterBase.FCALL_DEF:
+        if expr_ast.elem_type == InterpreterBase.FCALL_DEF or expr_ast.elem_type == InterpreterBase.MCALL_DEF:
             return self.__call_func(expr_ast)
         if expr_ast.elem_type in Interpreter.BIN_OPS:
             return self.__eval_op(expr_ast)
@@ -254,11 +275,19 @@ class Interpreter(InterpreterBase):
                 super().error(
                     ErrorType.TYPE_ERROR, f"{var_name} is not an object!"
                 )
-            if (obj.v.get_field_val(field) is None):
+            
+            value = obj.v.get_field_val(field)
+            while (value is None and obj.v.has_proto):
+                obj = obj.v.get_proto()
+                if (obj.t == Type.NIL):
+                    break
+                value = obj.v.get_field_val(field)
+            
+            if value is None:
                 super().error(
                     ErrorType.NAME_ERROR, f"Variable/function {var_name}.{field} not found"
                 )
-            return(obj.v.get_field_val(field))
+            return(value)
 
         closure = self.__get_func_by_name(var_name, None)
         if closure is None:
@@ -479,4 +508,3 @@ class Interpreter(InterpreterBase):
             return (ExecStatus.RETURN, Interpreter.NIL_VALUE)
         value_obj = copy.deepcopy(self.__eval_expr(expr_ast))
         return (ExecStatus.RETURN, value_obj)
-    
